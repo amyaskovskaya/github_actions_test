@@ -1,0 +1,51 @@
+# .github/workflows/deploy.yml
+name: Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # позволяет запустить вручную из UI
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e  # fail on error
+
+            # Папка проекта
+            PROJECT_PATH="${{ secrets.PROJECT_PATH }}"
+            mkdir -p "$PROJECT_PATH"
+
+            # Копируем всё содержимое репо (кроме .git)
+            cd "$PROJECT_PATH"
+            rsync -av --delete --exclude='.git' $GITHUB_WORKSPACE/ ./
+
+            # Перезапуск Airflow
+            if [ -f "docker-compose.yml" ]; then
+              echo "🔄 Останавливаем текущий стек..."
+              docker-compose down --remove-orphans || true
+
+              echo "📦 Собираем образы..."
+              docker-compose build --pull
+
+              echo "🚀 Запускаем новый стек..."
+              docker-compose up -d
+
+              echo "✅ Деплой завершён. Проверяем логи инициализации:"
+              sleep 10
+              docker-compose logs airflow-init | tail -20
+            else
+              echo "❌ docker-compose.yml не найден!"
+              exit 1
+            fi
